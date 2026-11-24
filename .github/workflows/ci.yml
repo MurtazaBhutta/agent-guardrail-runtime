@@ -1,0 +1,79 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  middleware:
+    name: middleware suite (no database)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      # Runs with no database and no credentials, which is the point: the policy layer
+      # depends on nothing. If this job ever needs a service container, the middleware has
+      # grown a dependency it should not have.
+      - run: pytest -m "not postgres"
+
+  isolation:
+    name: cross-tenant isolation (real PostgreSQL)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: guardrail
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d guardrail"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev,postgres]"
+
+      - name: Apply the schema as the owner
+        run: psql "$ADMIN_DSN" -v ON_ERROR_STOP=1 -f src/guardrail_runtime/tenancy/schema.sql
+        env:
+          ADMIN_DSN: postgresql://postgres:postgres@localhost:5432/guardrail
+
+      # The isolation tests are the reason this repo exists, so a skip is a failure. Without
+      # this guard a missing service container or an unset DSN would turn 20 security
+      # assertions into 20 silent skips and a green tick.
+      - name: Run the isolation suite, failing if anything is skipped
+        run: pytest -m postgres --strict-markers -rs
+        env:
+          GUARDRAIL_ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/guardrail
+          GUARDRAIL_DATABASE_URL: postgresql://guardrail_app:guardrail_app_dev_only@localhost:5432/guardrail
+
+      - name: Assert the isolation tests actually ran
+        run: |
+          COUNT=$(pytest -m postgres --collect-only -q 2>/dev/null | grep -c '::' || true)
+          echo "collected $COUNT isolation test(s)"
+          if [ "$COUNT" -lt 15 ]; then
+            echo "::error::Expected at least 15 isolation tests, collected $COUNT. Either the suite shrank or it is being skipped."
+            exit 1
+          fi
+        env:
+          GUARDRAIL_ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/guardrail
+          GUARDRAIL_DATABASE_URL: postgresql://guardrail_app:guardrail_app_dev_only@localhost:5432/guardrail

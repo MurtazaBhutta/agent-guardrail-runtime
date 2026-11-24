@@ -1,0 +1,27 @@
+# Local PostgreSQL for the isolation tests.
+#
+# The credentials here are development-only and deliberately boring. Nothing in this file is
+# suitable for anything reachable from a network you do not own.
+#
+#   make db-up      start it and apply the schema
+#   make test-all   run every test, isolation tests included
+#
+# The application role (`guardrail_app`) is created by schema.sql, not here, because the
+# point of that role is that it does *not* own the tables - so it has to be created after
+# them, by the owner.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: guardrail-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: guardrail
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d guardrail"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
