@@ -68,7 +68,9 @@ jobs:
 
       - name: Assert the isolation tests actually ran
         run: |
-          COUNT=$(pytest -m postgres --collect-only -q 2>/dev/null | grep -c '::' || true)
+          # -o addopts="" cancels the "-q" in pyproject; otherwise -q -q prints per-file
+          # counts ("file.py: 19") instead of test ids, and the grep below would count 0.
+          COUNT=$(pytest -m postgres --collect-only -q -o addopts="" 2>/dev/null | grep -c '::' || true)
           echo "collected $COUNT isolation test(s)"
           if [ "$COUNT" -lt 15 ]; then
             echo "::error::Expected at least 15 isolation tests, collected $COUNT. Either the suite shrank or it is being skipped."
