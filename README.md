@@ -58,6 +58,24 @@ No database, no API key, no network. Each scenario changes exactly one thing:
 
 Read those three together and the design shows: **the ledger reflects spend, not delivery.**
 
+### Claude or Azure OpenAI at the centre
+
+The layers wrap a two-method `ModelClient` port, so the provider is a constructor choice and
+nothing else changes. Both live clients map errors the same way: connection errors, rate
+limits and 5xx become the retryable `ModelUnavailable`; a refusal or content-filter stop is
+never reported as an empty answer; a 4xx is raised, not retried.
+
+```python
+from guardrail_runtime import AzureOpenAIModel, ClaudeModel
+
+model = ClaudeModel()          # pip install -e ".[claude]"; ANTHROPIC_API_KEY
+model = AzureOpenAIModel()     # pip install -e ".[azure]"; see below
+```
+
+`AzureOpenAIModel` uses the Azure OpenAI v1 API through the `openai` SDK and reads
+`AZURE_OPENAI_ENDPOINT` (`https://<resource>.openai.azure.com`), `AZURE_OPENAI_API_KEY` and
+`AZURE_OPENAI_DEPLOYMENT` (the deployment name, which Azure uses as the model id).
+
 ## The layer order is the design
 
 Outermost first. Each position encodes a decision, and
@@ -121,13 +139,13 @@ connection.
 
 | Suite | Count | Needs |
 |---|---|---|
-| Middleware policy | **77** | nothing — no database, no credentials, no network |
+| Middleware policy | **91** | nothing — no database, no credentials, no network |
 | Cross-tenant isolation | **19** | real PostgreSQL (`make db-up`) |
 
 ```bash
-make test        # 77 middleware tests
+make test        # 91 middleware tests
 make db-up       # PostgreSQL + schema
-make test-all    # all 96
+make test-all    # all 110
 ```
 
 Two CI jobs mirror that split. The isolation job additionally **fails if fewer than 15
@@ -148,9 +166,10 @@ security assertions into 19 silent skips and a green tick.
   and free. Real semantic screening needs a model, which is a different repo with different
   latency and cost properties.
 - **Retries widen the overshoot** in proportion to `max_attempts`, since all attempts bill.
-- **`ClaudeModel` is the only live backend** and is exercised by hand, not in CI. The
-  `ScriptedModel` double is what makes the retry, budget and guardrail behaviour exhaustively
-  testable without a credential.
+- **The live backends are not called in CI.** `AzureOpenAIModel`'s request shape and error
+  mapping are tested against a fake client that raises the SDK's real exception types;
+  `ClaudeModel` is exercised by hand. The `ScriptedModel` double is what makes the retry,
+  budget and guardrail behaviour exhaustively testable without a credential.
 - **No async.** The chain is synchronous, which keeps the composition legible. A
   throughput-sensitive deployment would want an async variant of the same shape.
 
@@ -163,7 +182,7 @@ src/guardrail_runtime/
   chain.py         middleware protocol and onion composition
   context.py       per-run state; injected clock so budget windows are testable
   ports.py         storage ports + in-memory doubles
-  model.py         ModelClient: ScriptedModel (tests) | ClaudeModel (live)
+  model.py         ModelClient: ScriptedModel (tests) | ClaudeModel | AzureOpenAIModel (live)
   middleware/      the seven layers, one file each
   runtime.py       default_layers() - the safety posture in one expression
   tenancy/

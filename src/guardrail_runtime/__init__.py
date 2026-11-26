@@ -7,13 +7,14 @@ filter.
 
 from .config import TenantConfig
 from .context import RunContext
-from .model import ClaudeModel, ScriptedModel
+from .model import AzureOpenAIModel, ClaudeModel, ScriptedModel
 from .runtime import Runtime, default_layers
 from .types import HaltReason, Pricing, Request, Response, RunStatus, Usage
 
 __version__ = "0.1.0"
 
 __all__ = [
+    "AzureOpenAIModel",
     "ClaudeModel",
     "HaltReason",
     "Pricing",

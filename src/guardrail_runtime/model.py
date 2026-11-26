@@ -92,6 +92,82 @@ class ClaudeModel:
         return text, usage
 
 
+class AzureOpenAIModel:
+    """The same call against an Azure OpenAI deployment. Requires the optional `azure` extra.
+
+    Uses the Azure OpenAI v1 API through the plain `openai` client, so there is no
+    `api_version` to pin. The model parameter is the *deployment* name, not a model family.
+    Configuration comes from AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY and
+    AZURE_OPENAI_DEPLOYMENT unless passed in. A `client` can be injected for tests.
+    """
+
+    def __init__(
+        self,
+        deployment: str | None = None,
+        max_tokens: int = 4096,
+        *,
+        endpoint: str | None = None,
+        api_key: str | None = None,
+        client: object | None = None,
+    ) -> None:
+        self.deployment = deployment or os.environ.get("AZURE_OPENAI_DEPLOYMENT", "")
+        self.max_tokens = max_tokens
+        if not self.deployment:
+            raise ValueError("set AZURE_OPENAI_DEPLOYMENT to the Azure OpenAI deployment name")
+        if client is not None:
+            self._client = client
+            return
+
+        endpoint = endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+        api_key = api_key or os.environ.get("AZURE_OPENAI_API_KEY", "")
+        missing = [
+            name
+            for name, value in (
+                ("AZURE_OPENAI_ENDPOINT", endpoint),
+                ("AZURE_OPENAI_API_KEY", api_key),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(f"Azure OpenAI is not configured: set {', '.join(missing)}")
+
+        import openai
+
+        self._client = openai.OpenAI(base_url=f"{endpoint.rstrip('/')}/openai/v1/", api_key=api_key)
+
+    def complete(self, prompt: str) -> tuple[str, Usage]:
+        import openai
+
+        try:
+            completion = self._client.chat.completions.create(
+                model=self.deployment,
+                messages=[{"role": "user", "content": prompt}],
+                max_completion_tokens=self.max_tokens,
+            )
+        except (openai.APIConnectionError, openai.RateLimitError) as exc:
+            # APITimeoutError is a subclass of APIConnectionError. Same policy as ClaudeModel:
+            # transient failures become the retryable exception.
+            raise ModelUnavailable(str(exc)) from exc
+        except openai.APIStatusError as exc:
+            if exc.status_code >= 500:
+                raise ModelUnavailable(f"status {exc.status_code}") from exc
+            raise
+
+        usage = Usage(
+            input_tokens=completion.usage.prompt_tokens if completion.usage else 0,
+            output_tokens=completion.usage.completion_tokens if completion.usage else 0,
+            attempts=1,
+        )
+
+        # As with Claude: a refusal or a content-filter stop comes back as a successful
+        # response with no usable output, so it is checked before the content is read.
+        choice = completion.choices[0]
+        if choice.finish_reason == "content_filter" or choice.message.refusal:
+            raise ModelUnavailable("model declined the request")
+
+        return choice.message.content or "", usage
+
+
 def terminal_handler(model: ModelClient) -> object:
     """Wrap a `ModelClient` as the innermost handler of the chain."""
 

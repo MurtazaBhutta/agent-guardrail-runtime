@@ -9,9 +9,12 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6"]
+# openai is in dev only so the Azure client's error mapping is tested against the SDK's real
+# exception types; the tests use a fake client and never touch the network.
+dev = ["pytest>=8.0", "ruff>=0.6", "openai>=2.0"]
 postgres = ["psycopg[binary]>=3.1"]
 claude = ["anthropic>=0.69"]
+azure = ["openai>=2.0"]
 
 [build-system]
 requires = ["hatchling"]
